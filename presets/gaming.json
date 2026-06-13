@@ -1,0 +1,55 @@
+{
+  "profileName": "Gaming Recording Setup",
+  "version": "1.0.0",
+  "description": "Preset for gameplay recordings with markers, panic button, and meme sound slots.",
+  "sources": {
+    "mic": "Microphone/Aux",
+    "desktopAudio": "Desktop Audio",
+    "camera": "Camera"
+  },
+  "scenes": {
+    "panic": "BRB",
+    "intro": "Intro",
+    "main": "Gameplay"
+  },
+  "recordingGuard": {
+    "enabled": true,
+    "checkMicrophone": true,
+    "checkDesktopAudio": true,
+    "checkCamera": true
+  },
+  "autoIntro": {
+    "enabled": true,
+    "delaySeconds": 5
+  },
+  "markers": [
+    "Highlight",
+    "Funny",
+    "Cut",
+    "Mistake",
+    "Audio",
+    "Panic"
+  ],
+  "soundpad": [
+    {
+      "title": "Bruh",
+      "file": "sounds/bruh.mp3",
+      "volume": 80
+    },
+    {
+      "title": "Vine Boom",
+      "file": "sounds/vine-boom.mp3",
+      "volume": 75
+    },
+    {
+      "title": "Laugh",
+      "file": "sounds/laugh.wav",
+      "volume": 70
+    },
+    {
+      "title": "Fail",
+      "file": "sounds/fail.wav",
+      "volume": 70
+    }
+  ]
+}
