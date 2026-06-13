@@ -1,0 +1,54 @@
+{
+  "profileName": "Podcast Recording Setup",
+  "version": "1.0.0",
+  "description": "Preset for podcasts, interviews, and long-form talking videos.",
+  "sources": {
+    "mic": "Microphone/Aux",
+    "desktopAudio": "Desktop Audio",
+    "camera": "Camera"
+  },
+  "scenes": {
+    "panic": "Pause",
+    "intro": "Intro",
+    "main": "Podcast"
+  },
+  "recordingGuard": {
+    "enabled": true,
+    "checkMicrophone": true,
+    "checkDesktopAudio": false,
+    "checkCamera": true
+  },
+  "autoIntro": {
+    "enabled": false,
+    "delaySeconds": 5
+  },
+  "markers": [
+    "Important",
+    "Cut",
+    "Question",
+    "Audio",
+    "Guest Quote"
+  ],
+  "soundpad": [
+    {
+      "title": "Intro Sting",
+      "file": "sounds/intro-sting.wav",
+      "volume": 60
+    },
+    {
+      "title": "Applause",
+      "file": "sounds/applause.wav",
+      "volume": 50
+    },
+    {
+      "title": "Transition",
+      "file": "sounds/transition.wav",
+      "volume": 55
+    },
+    {
+      "title": "Silence",
+      "file": "sounds/silence.wav",
+      "volume": 0
+    }
+  ]
+}
