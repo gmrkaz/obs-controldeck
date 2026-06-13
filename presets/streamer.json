@@ -1,0 +1,55 @@
+{
+  "profileName": "Streamer Setup",
+  "version": "1.0.0",
+  "description": "Preset for streamers using a safe scene, marker hotkeys, and soundpad slots.",
+  "sources": {
+    "mic": "Microphone/Aux",
+    "desktopAudio": "Desktop Audio",
+    "camera": "Camera"
+  },
+  "scenes": {
+    "panic": "BRB",
+    "intro": "Starting Soon",
+    "main": "Live"
+  },
+  "recordingGuard": {
+    "enabled": true,
+    "checkMicrophone": true,
+    "checkDesktopAudio": true,
+    "checkCamera": true
+  },
+  "autoIntro": {
+    "enabled": false,
+    "delaySeconds": 5
+  },
+  "markers": [
+    "Highlight",
+    "Funny",
+    "Clip",
+    "Raid",
+    "Audio",
+    "Panic"
+  ],
+  "soundpad": [
+    {
+      "title": "Alert",
+      "file": "sounds/alert.wav",
+      "volume": 60
+    },
+    {
+      "title": "Applause",
+      "file": "sounds/applause.wav",
+      "volume": 60
+    },
+    {
+      "title": "Laugh",
+      "file": "sounds/laugh.wav",
+      "volume": 70
+    },
+    {
+      "title": "Transition",
+      "file": "sounds/transition.wav",
+      "volume": 55
+    }
+  ]
+}
