@@ -1,0 +1,29 @@
+{
+  "profileName": "Example Creator Setup",
+  "version": "1.0.0",
+  "sources": {
+    "mic": "Microphone/Aux",
+    "desktopAudio": "Desktop Audio",
+    "camera": "Camera"
+  },
+  "scenes": {
+    "panic": "BRB",
+    "intro": "Intro",
+    "main": "Main"
+  },
+  "hotkeys": {
+    "addMarker": "F6",
+    "panicButton": "F10",
+    "sound1": "F1",
+    "sound2": "F2",
+    "sound3": "F3",
+    "sound4": "F4"
+  },
+  "soundpad": [
+    {
+      "title": "Sound 1",
+      "file": "sounds/sound-1.wav",
+      "volume": 80
+    }
+  ]
+}
