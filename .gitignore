@@ -1,0 +1,20 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local OBS/session output
+*.log
+*-markers.txt
+*-markers.json
+OBS-ControlDeck-Sessions/
+
+# Local sound files
+sounds/*.mp3
+sounds/*.wav
+sounds/*.ogg
+sounds/*.flac
+!sounds/README.md
+
+# Editor
+.vscode/
+.idea/
