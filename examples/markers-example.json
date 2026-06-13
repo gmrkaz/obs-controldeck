@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "generatedAt": "2026-06-13 18:30:00",
+  "markers": [
+    {
+      "time": "00:00:00",
+      "seconds": 0,
+      "type": "Start",
+      "scene": "Intro",
+      "note": "Recording started"
+    },
+    {
+      "time": "00:02:13",
+      "seconds": 133,
+      "type": "Funny",
+      "scene": "Gameplay",
+      "note": "Funny moment"
+    },
+    {
+      "time": "00:05:47",
+      "seconds": 347,
+      "type": "Highlight",
+      "scene": "Gameplay",
+      "note": "Important moment"
+    }
+  ],
+  "sceneTotals": {
+    "Intro": 5,
+    "Gameplay": 342
+  }
+}
