@@ -5,9 +5,9 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![OBS](https://img.shields.io/badge/OBS-Studio-302E31)
 ![Lua](https://img.shields.io/badge/script-Lua-2C2D72)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Source--Available-red)
 
-**OBS ControlDeck** is an open-source toolkit for OBS Studio that adds recording markers, timestamped clip notes, scene timers, panic actions, recording checks, a built-in soundpad, local presets, and safe config sharing.
+**OBS ControlDeck** is a source-available toolkit for OBS Studio that adds recording markers, timestamped clip notes, scene timers, panic actions, recording checks, a built-in soundpad, local presets, and safe config sharing.
 
 It is designed for creators who record gameplay, tutorials, podcasts, reactions, highlights, streams, and long-form videos.
 
@@ -210,4 +210,8 @@ obs-controldeck/
 
 ## License
 
-MIT License. See [`LICENSE`](LICENSE).
+OBS ControlDeck is **source-available, not open-source**.
+
+You may view the code, use it personally, and fork it only to propose changes back to the original project. You may not copy, redistribute, sell, rebrand, publish modified versions, or use the project commercially without written permission from the copyright holder.
+
+See [`LICENSE`](LICENSE) for the full terms.
