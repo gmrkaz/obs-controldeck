@@ -1,46 +1,157 @@
 # OBS ControlDeck
 
-> Creator-focused control toolkit for OBS Studio.
+> A creator-focused control toolkit for OBS Studio.
 
-OBS ControlDeck is an open-source OBS toolkit that adds recording markers, timestamped clip notes, scene timers, panic actions, recording checks, a built-in soundpad, local presets, and creator-focused automation.
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![OBS](https://img.shields.io/badge/OBS-Studio-302E31)
+![Lua](https://img.shields.io/badge/script-Lua-2C2D72)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-This repository starts as a Lua script for OBS Studio so it is easy to install and test. The long-term goal is to evolve it into a full OBS plugin or companion panel.
+**OBS ControlDeck** is an open-source toolkit for OBS Studio that adds recording markers, timestamped clip notes, scene timers, panic actions, recording checks, a built-in soundpad, local presets, and safe config sharing.
 
-## Features
+It is designed for creators who record gameplay, tutorials, podcasts, reactions, highlights, streams, and long-form videos.
 
-### Included in the first version
+## v1.0.0 release
 
-- **AutoMarker** — add timestamped markers while recording.
-- **ClipNotes** — save notes such as `Funny`, `Cut`, `Mistake`, `Highlight`, and custom comments.
-- **Scene Timer** — track how long each scene was active during a session.
-- **Panic Button** — mute a selected mic, hide a selected camera source, switch to a safe scene, and stop active soundpad sources.
-- **Recording Guard** — warn when important sources are missing, muted, or misconfigured.
-- **AutoIntro** — optional intro scene flow before switching to the main scene.
-- **Reaction Cam** — hotkey-friendly reaction mode concept for zoom/focus workflows.
-- **Clean Recorder** — exports notes and session data into organized folders.
-- **Built-in Soundpad** — trigger local audio files through OBS media sources.
-- **Config Import/Export** — load and share creator presets.
+The first stable release is focused on a lightweight OBS Lua workflow:
 
-### Not included
+- easy install through `Tools -> Scripts`;
+- no external account required;
+- no YouTube helper or upload automation;
+- no bundled copyrighted sounds;
+- safe preset import preview before applying anything.
 
-- YouTube title/description/tag generation.
-- YouTube upload helpers.
-- External analytics.
+## Core features
 
-## Why this exists
+### AutoMarker
 
-OBS is powerful, but creators often need many small tools around it: notes for editing, sound buttons, panic actions, scene timers, and reusable setups. OBS ControlDeck brings those tools into one lightweight project.
+Add timestamped markers while recording. Each marker includes:
+
+- time from recording start;
+- marker type;
+- note;
+- current scene;
+- creation time.
+
+### ClipNotes
+
+Create editing notes such as:
+
+- Highlight;
+- Funny;
+- Mistake;
+- Audio;
+- Panic;
+- Reaction;
+- Custom.
+
+Exports are saved as both `.txt` and `.json`.
+
+### Scene Timer
+
+Track how long each scene was active during a recording session.
+
+### Panic Button
+
+One hotkey can:
+
+- add a panic marker;
+- mute a configured microphone source;
+- hide a configured camera source in the current scene;
+- stop active soundpad media sources;
+- switch to a configured safe scene.
+
+### Recording Guard
+
+When recording starts, OBS ControlDeck checks common setup problems:
+
+- output folder missing;
+- microphone source missing;
+- microphone muted;
+- desktop audio source missing;
+- desktop audio muted;
+- no active scene detected.
+
+### AutoIntro
+
+Optionally switch to an intro scene when recording starts, wait a few seconds, then switch to your main scene.
+
+### Reaction Marker
+
+A dedicated reaction hotkey can mark moments that should become reaction clips later.
+
+### Built-in Soundpad
+
+Trigger local audio files from OBS using hotkeys. The v1.0.0 script includes eight configurable sound slots.
+
+Supported local file types in the UI filter:
+
+```txt
+.mp3
+.wav
+.ogg
+.flac
+```
+
+### Config import/export
+
+Export your current ControlDeck setup to a JSON-style preset. Import preview is intentionally safe: v1.0.0 reads and previews config text in the OBS script log instead of silently overwriting your setup.
 
 ## Quick start
 
-1. Open OBS Studio.
-2. Go to `Tools` -> `Scripts`.
-3. Add `src/obs_controldeck.lua`.
-4. Configure your output folder, scenes, sources, and sound files.
-5. Assign hotkeys in OBS settings.
-6. Start recording and use markers, notes, panic actions, and soundpad buttons.
+1. Download or clone this repository.
+2. Open OBS Studio.
+3. Go to `Tools` -> `Scripts`.
+4. Add `src/obs_controldeck.lua`.
+5. Configure your output folder, scenes, sources, and sound files.
+6. Assign hotkeys in OBS settings.
+7. Start recording and use markers, notes, panic actions, and soundpad buttons.
 
-More details are in [`docs/installation.md`](docs/installation.md) and [`docs/configuration.md`](docs/configuration.md).
+Detailed setup:
+
+- [`docs/installation.md`](docs/installation.md)
+- [`docs/configuration.md`](docs/configuration.md)
+- [`docs/soundpad.md`](docs/soundpad.md)
+- [`docs/presets.md`](docs/presets.md)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md)
+
+## Recommended OBS hotkeys
+
+| Action | Suggested key |
+| --- | --- |
+| Add marker | F6 |
+| Reaction marker | F7 |
+| Panic Button | F10 |
+| Sound 1-8 | Numpad 1-8 |
+
+## Output files
+
+After a session, OBS ControlDeck writes files like:
+
+```txt
+2026-06-14_20-30-10-markers.txt
+2026-06-14_20-30-10-markers.json
+```
+
+Example JSON:
+
+```json
+{
+  "version": "1.0.0",
+  "markers": [
+    {
+      "time": "00:02:13",
+      "seconds": 133,
+      "type": "Highlight",
+      "scene": "Gameplay",
+      "note": "Good moment"
+    }
+  ],
+  "sceneTotals": {
+    "Gameplay": 133
+  }
+}
+```
 
 ## Presets
 
@@ -48,46 +159,11 @@ Example presets live in [`presets/`](presets/):
 
 - `gaming.json`
 - `podcast.json`
-- `low-end-pc.json`
 - `streamer.json`
 
-Presets are meant to be safe to preview before applying. A preset should never silently overwrite everything without user awareness.
+Preset schema:
 
-## Project status
-
-Early development. The repository contains a working foundation and a clear roadmap, but some advanced behaviors may need adjustment depending on your OBS version, OS, and scene setup.
-
-## Roadmap
-
-### v0.1
-
-- Lua script MVP
-- Markers and clip notes
-- Scene timer
-- Basic soundpad
-- Config import/export
-- Example presets
-
-### v0.2
-
-- Better soundpack management
-- Stronger Recording Guard checks
-- Clean Recorder folder templates
-- Improved panic actions
-
-### v0.3
-
-- Local browser control panel
-- Reaction Cam automation
-- Themeable interface
-- Better preset preview
-
-### v1.0
-
-- Stable creator toolkit
-- Full documentation
-- Packaged releases
-- Optional migration to native OBS plugin
+- [`schema/control-deck-preset.schema.json`](schema/control-deck-preset.schema.json)
 
 ## Repository layout
 
@@ -99,21 +175,38 @@ obs-controldeck/
 │  ├─ installation.md
 │  ├─ configuration.md
 │  ├─ soundpad.md
-│  └─ presets.md
+│  ├─ presets.md
+│  ├─ troubleshooting.md
+│  └─ release-checklist.md
+├─ schema/
+│  └─ control-deck-preset.schema.json
 ├─ presets/
 │  ├─ gaming.json
 │  ├─ podcast.json
-│  ├─ low-end-pc.json
 │  └─ streamer.json
 ├─ examples/
 │  ├─ config-example.json
 │  └─ markers-example.json
 ├─ sounds/
 │  └─ README.md
+├─ RELEASE_NOTES.md
 ├─ CHANGELOG.md
+├─ VERSION
+├─ SECURITY.md
 ├─ CONTRIBUTING.md
 └─ LICENSE
 ```
+
+## What is intentionally not included
+
+- YouTube title/description/tag generation.
+- YouTube upload helpers.
+- Bundled copyrighted sound files.
+- Silent config overwrite from third-party presets.
+
+## Status
+
+**Stable v1.0.0 foundation.** Advanced UI panels and native plugin packaging are planned after the Lua release.
 
 ## License
 
