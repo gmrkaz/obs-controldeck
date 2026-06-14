@@ -1,21 +1,66 @@
-MIT License
+OBS ControlDeck Source-Available Personal Use License v1.0
 
-Copyright (c) 2026 Ametist1k
+Copyright (c) 2026 Ametist1k.
+All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license applies to OBS ControlDeck, including its source code, documentation,
+presets, examples, workflows, project name, branding, and related files.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Allowed use
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may:
+
+- view the source code;
+- download and run the software for personal, non-commercial use;
+- fork the repository on GitHub only for the purpose of proposing changes back to the original project;
+- submit issues, pull requests, bug reports, documentation improvements, and suggestions;
+- share links to the original repository.
+
+2. Prohibited use
+
+You may not, without prior written permission from the copyright holder:
+
+- copy, redistribute, sell, rent, sublicense, or publish the software as your own;
+- re-upload the project or substantial parts of it to another repository, marketplace, website, package registry, plugin directory, or distribution platform;
+- remove or change copyright notices, license text, author credits, project name, or attribution;
+- rename, rebrand, or present OBS ControlDeck or a modified version as an independent competing project;
+- use the software or substantial parts of it in a commercial product, paid service, paid plugin, paid course, paid bundle, or monetized distribution;
+- create and distribute modified versions, forks, clones, or derivative works outside the original GitHub contribution workflow;
+- use the OBS ControlDeck name, logo, branding, or confusingly similar names for another project;
+- include copyrighted sound files or third-party assets in a public distribution unless you have permission to do so.
+
+3. Contributions
+
+By submitting a contribution, pull request, issue patch, documentation edit, preset,
+or other project contribution, you grant the copyright holder a perpetual, worldwide,
+royalty-free license to use, modify, publish, and distribute that contribution as part
+of OBS ControlDeck.
+
+You confirm that you have the right to submit your contribution and that it does not
+intentionally include stolen code, copyrighted sound files, malware, or content you do
+not have permission to contribute.
+
+4. Third-party configs and presets
+
+Configs and presets are treated as untrusted user content. Public presets must not
+silently overwrite another user's OBS setup, include malicious paths, or include
+copyrighted assets without permission.
+
+5. No warranty
+
+The software is provided "as is", without warranty of any kind. The copyright holder
+is not responsible for data loss, OBS misconfiguration, audio problems, recording
+issues, streaming interruptions, copyright claims involving user-provided sounds, or
+other damages arising from use of the software.
+
+6. Permission requests
+
+For commercial use, redistribution, plugin marketplace publication, bundled releases,
+or other uses not allowed above, you must request written permission from the copyright
+holder before using the software.
+
+7. Termination
+
+If you violate this license, your rights under this license terminate immediately.
+You must stop using, copying, distributing, or publishing the software and remove any
+unauthorized copies or derivatives under your control.
