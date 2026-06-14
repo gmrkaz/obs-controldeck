@@ -1,12 +1,12 @@
 -- OBS ControlDeck
 -- Creator-focused toolkit for OBS Studio.
--- Version: 0.1.0
+-- Version: 1.0.0
 
 obs = obslua
 
-local VERSION = "0.1.0"
+local VERSION = "1.0.0"
+local SOUND_SLOTS = 8
 
-local settings_ref = nil
 local output_dir = ""
 local marker_note = ""
 local marker_type = "Highlight"
@@ -27,33 +27,39 @@ local current_scene_name = ""
 local current_scene_entered_at = os.time()
 local scene_totals = {}
 local markers = {}
+local session_saved = false
 
-local sounds = {
-  { title = "Sound 1", file = "", volume = 80 },
-  { title = "Sound 2", file = "", volume = 80 },
-  { title = "Sound 3", file = "", volume = 80 },
-  { title = "Sound 4", file = "", volume = 80 }
-}
+local sounds = {}
+for i = 1, SOUND_SLOTS do
+  sounds[i] = { title = "Sound " .. tostring(i), file = "", volume = 80 }
+end
 
 local hotkey_ids = {
   add_marker = obs.OBS_INVALID_HOTKEY_ID,
-  panic = obs.OBS_INVALID_HOTKEY_ID,
-  sound1 = obs.OBS_INVALID_HOTKEY_ID,
-  sound2 = obs.OBS_INVALID_HOTKEY_ID,
-  sound3 = obs.OBS_INVALID_HOTKEY_ID,
-  sound4 = obs.OBS_INVALID_HOTKEY_ID
+  reaction_marker = obs.OBS_INVALID_HOTKEY_ID,
+  panic = obs.OBS_INVALID_HOTKEY_ID
 }
+for i = 1, SOUND_SLOTS do
+  hotkey_ids["sound" .. tostring(i)] = obs.OBS_INVALID_HOTKEY_ID
+end
 
 local function log_info(message)
-  obs.script_log(obs.LOG_INFO, "[OBS ControlDeck] " .. message)
+  obs.script_log(obs.LOG_INFO, "[OBS ControlDeck] " .. tostring(message))
 end
 
 local function log_warn(message)
-  obs.script_log(obs.LOG_WARNING, "[OBS ControlDeck] " .. message)
+  obs.script_log(obs.LOG_WARNING, "[OBS ControlDeck] " .. tostring(message))
 end
 
 local function is_blank(value)
   return value == nil or value == ""
+end
+
+local function clamp(value, min_value, max_value)
+  value = tonumber(value) or min_value
+  if value < min_value then return min_value end
+  if value > max_value then return max_value end
+  return value
 end
 
 local function pad2(value)
@@ -73,12 +79,6 @@ end
 local function get_session_seconds()
   if recording_started_at == nil then return 0 end
   return os.time() - recording_started_at
-end
-
-local function safe_filename(value)
-  value = value or "session"
-  value = value:gsub("[^%w%-%_]+", "-")
-  return value
 end
 
 local function path_join(a, b)
@@ -116,16 +116,13 @@ local function write_file(path, content)
   return true
 end
 
-local function append_file(path, content)
-  if is_blank(path) then return false end
-  local file = io.open(path, "a")
-  if file == nil then
-    log_warn("Could not append file: " .. path)
-    return false
-  end
-  file:write(content)
+local function read_file(path)
+  if is_blank(path) then return nil end
+  local file = io.open(path, "r")
+  if file == nil then return nil end
+  local content = file:read("*a")
   file:close()
-  return true
+  return content
 end
 
 local function get_current_scene_name()
@@ -206,10 +203,15 @@ end
 local function build_markers_txt()
   local lines = {}
   table.insert(lines, "OBS ControlDeck Markers")
+  table.insert(lines, "Version: " .. VERSION)
   table.insert(lines, "Generated: " .. os.date("%Y-%m-%d %H:%M:%S"))
   table.insert(lines, "")
-  for _, m in ipairs(markers) do
-    table.insert(lines, m.time .. " — " .. m.type .. " — " .. m.scene .. " — " .. m.note)
+  if #markers == 0 then
+    table.insert(lines, "No markers were created in this session.")
+  else
+    for _, m in ipairs(markers) do
+      table.insert(lines, m.time .. " - " .. m.type .. " - " .. m.scene .. " - " .. m.note)
+    end
   end
   table.insert(lines, "")
   table.insert(lines, "Scene totals:")
@@ -231,7 +233,8 @@ local function build_markers_json()
     table.insert(chunks, "      \"seconds\": " .. tostring(m.seconds) .. ",\n")
     table.insert(chunks, "      \"type\": \"" .. escape_json(m.type) .. "\",\n")
     table.insert(chunks, "      \"scene\": \"" .. escape_json(m.scene) .. "\",\n")
-    table.insert(chunks, "      \"note\": \"" .. escape_json(m.note) .. "\"\n")
+    table.insert(chunks, "      \"note\": \"" .. escape_json(m.note) .. "\",\n")
+    table.insert(chunks, "      \"createdAt\": \"" .. escape_json(m.created_at) .. "\"\n")
     table.insert(chunks, "    }")
     if i < #markers then table.insert(chunks, ",") end
     table.insert(chunks, "\n")
@@ -250,22 +253,28 @@ local function build_markers_json()
 end
 
 local function save_session_files()
+  if session_saved then return end
   if is_blank(output_dir) then
     log_warn("Output directory is empty. Session files were not saved.")
     return
   end
   update_scene_timer()
   local prefix = session_prefix()
-  write_file(path_join(output_dir, prefix .. "-markers.txt"), build_markers_txt())
-  write_file(path_join(output_dir, prefix .. "-markers.json"), build_markers_json())
-  log_info("Session files saved to: " .. output_dir)
+  local txt_path = path_join(output_dir, prefix .. "-markers.txt")
+  local json_path = path_join(output_dir, prefix .. "-markers.json")
+  local txt_ok = write_file(txt_path, build_markers_txt())
+  local json_ok = write_file(json_path, build_markers_json())
+  if txt_ok or json_ok then
+    session_saved = true
+    log_info("Session files saved to: " .. output_dir)
+  end
 end
 
 local function recording_guard_check()
   if not enable_recording_guard then return true end
   local ok = true
   if is_blank(output_dir) then
-    log_warn("Recording Guard: output directory is not configured.")
+    log_warn("Recording Guard: output folder is not configured.")
     ok = false
   end
   if not is_blank(mic_source_name) then
@@ -302,13 +311,19 @@ local function recording_guard_check()
   return ok
 end
 
+local function sound_source_name(slot)
+  local sound = sounds[slot]
+  if sound == nil then return "ControlDeck Sound " .. tostring(slot) end
+  return "ControlDeck Sound " .. tostring(slot) .. " - " .. tostring(sound.title or "Untitled")
+end
+
 local function ensure_sound_source(slot)
   local sound = sounds[slot]
   if sound == nil or is_blank(sound.file) then
     log_warn("Sound slot " .. tostring(slot) .. " has no file configured.")
     return nil
   end
-  local source_name = "ControlDeck Sound " .. tostring(slot) .. " - " .. sound.title
+  local source_name = sound_source_name(slot)
   local source = obs.obs_get_source_by_name(source_name)
   if source ~= nil then return source end
 
@@ -341,23 +356,16 @@ end
 local function play_sound(slot)
   local source = ensure_sound_source(slot)
   if source == nil then return end
-  local volume = tonumber(sounds[slot].volume) or 80
-  obs.obs_source_set_volume(source, math.max(0, math.min(100, volume)) / 100.0)
-  if obs.obs_source_media_restart ~= nil then
-    obs.obs_source_media_restart(source)
-  end
-  if obs.obs_source_media_play_pause ~= nil then
-    obs.obs_source_media_play_pause(source, false)
-  end
-  log_info("Playing sound slot " .. tostring(slot) .. ": " .. sounds[slot].title)
+  local volume = clamp(sounds[slot].volume, 0, 100)
+  obs.obs_source_set_volume(source, volume / 100.0)
+  if obs.obs_source_media_restart ~= nil then obs.obs_source_media_restart(source) end
+  if obs.obs_source_media_play_pause ~= nil then obs.obs_source_media_play_pause(source, false) end
+  log_info("Playing sound slot " .. tostring(slot) .. ": " .. tostring(sounds[slot].title))
   obs.obs_source_release(source)
 end
 
 local function stop_sound(slot)
-  local sound = sounds[slot]
-  if sound == nil then return end
-  local source_name = "ControlDeck Sound " .. tostring(slot) .. " - " .. sound.title
-  local source = obs.obs_get_source_by_name(source_name)
+  local source = obs.obs_get_source_by_name(sound_source_name(slot))
   if source ~= nil then
     if obs.obs_source_media_stop ~= nil then obs.obs_source_media_stop(source) end
     obs.obs_source_release(source)
@@ -365,7 +373,7 @@ local function stop_sound(slot)
 end
 
 local function stop_all_sounds()
-  for i = 1, #sounds do stop_sound(i) end
+  for i = 1, SOUND_SLOTS do stop_sound(i) end
 end
 
 local function panic_action()
@@ -396,37 +404,22 @@ local function export_config()
   table.insert(json, "    \"intro\": \"" .. escape_json(intro_scene_name) .. "\",\n")
   table.insert(json, "    \"main\": \"" .. escape_json(main_scene_name) .. "\"\n")
   table.insert(json, "  },\n")
+  table.insert(json, "  \"recordingGuard\": { \"enabled\": " .. tostring(enable_recording_guard) .. " },\n")
+  table.insert(json, "  \"autoIntro\": { \"enabled\": " .. tostring(enable_auto_intro) .. ", \"delaySeconds\": " .. tostring(auto_intro_seconds) .. " },\n")
   table.insert(json, "  \"soundpad\": [\n")
   for i, s in ipairs(sounds) do
-    table.insert(json, "    { \"title\": \"" .. escape_json(s.title) .. "\", \"file\": \"" .. escape_json(s.file) .. "\", \"volume\": " .. tostring(s.volume) .. " }")
+    table.insert(json, "    { \"title\": \"" .. escape_json(s.title) .. "\", \"file\": \"" .. escape_json(s.file) .. "\", \"volume\": " .. tostring(clamp(s.volume, 0, 100)) .. " }")
     if i < #sounds then table.insert(json, ",") end
     table.insert(json, "\n")
   end
   table.insert(json, "  ]\n")
   table.insert(json, "}\n")
-  write_file(export_config_path, table.concat(json, ""))
-  log_info("Config exported to: " .. export_config_path)
+  if write_file(export_config_path, table.concat(json, "")) then
+    log_info("Config exported to: " .. export_config_path)
+  end
 end
 
-local function read_file(path)
-  local file = io.open(path, "r")
-  if file == nil then return nil end
-  local content = file:read("*a")
-  file:close()
-  return content
-end
-
-local function apply_simple_config(content)
-  -- Lightweight preview/import foundation.
-  -- The script intentionally does not silently overwrite OBS scenes.
-  -- Future versions will use a stricter JSON schema parser.
-  if content == nil then return false end
-  log_info("Config loaded for preview. Manual apply is recommended in v0.1.")
-  log_info(content:sub(1, 500))
-  return true
-end
-
-local function import_config()
+local function import_config_preview()
   if is_blank(import_config_path) then
     log_warn("Import config path is empty.")
     return
@@ -436,7 +429,16 @@ local function import_config()
     log_warn("Could not read config: " .. import_config_path)
     return
   end
-  apply_simple_config(content)
+  log_info("Config preview loaded. v1.0.0 does not silently apply third-party configs.")
+  log_info("Preview first 1000 characters:\n" .. content:sub(1, 1000))
+end
+
+function control_deck_auto_intro_finish()
+  if not is_blank(main_scene_name) then
+    switch_to_scene(main_scene_name)
+    add_marker("AutoIntro switched to main scene", "AutoIntro")
+  end
+  obs.timer_remove(control_deck_auto_intro_finish)
 end
 
 local function auto_intro_start()
@@ -444,17 +446,15 @@ local function auto_intro_start()
   if is_blank(intro_scene_name) or is_blank(main_scene_name) then return end
   switch_to_scene(intro_scene_name)
   add_marker("AutoIntro started", "AutoIntro")
-  obs.timer_add(function()
-    switch_to_scene(main_scene_name)
-    add_marker("AutoIntro switched to main scene", "AutoIntro")
-    obs.timer_remove(auto_intro_start)
-  end, math.max(1, auto_intro_seconds) * 1000)
+  obs.timer_remove(control_deck_auto_intro_finish)
+  obs.timer_add(control_deck_auto_intro_finish, clamp(auto_intro_seconds, 1, 60) * 1000)
 end
 
 local function on_event(event)
   if event == obs.OBS_FRONTEND_EVENT_RECORDING_STARTED then
     markers = {}
     scene_totals = {}
+    session_saved = false
     recording_started_at = os.time()
     current_scene_name = get_current_scene_name()
     current_scene_entered_at = os.time()
@@ -474,6 +474,10 @@ local function hotkey_marker(pressed)
   if pressed then add_marker(marker_note, marker_type) end
 end
 
+local function hotkey_reaction_marker(pressed)
+  if pressed then add_marker("Reaction moment", "Reaction") end
+end
+
 local function hotkey_panic(pressed)
   if pressed then panic_action() end
 end
@@ -486,7 +490,7 @@ end
 
 function script_description()
   return "OBS ControlDeck " .. VERSION .. "\n\n" ..
-         "Markers, clip notes, scene timer, panic button, recording guard, soundpad, and config presets for OBS Studio."
+         "Release-ready toolkit: markers, clip notes, scene timer, panic button, recording guard, soundpad, and safe config presets."
 end
 
 function script_properties()
@@ -496,7 +500,7 @@ function script_properties()
   obs.obs_properties_add_text(props, "marker_note", "Default marker note", obs.OBS_TEXT_DEFAULT)
 
   local type_list = obs.obs_properties_add_list(props, "marker_type", "Default marker type", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
-  for _, value in ipairs({"Highlight", "Funny", "Cut", "Mistake", "Audio", "Panic", "Custom"}) do
+  for _, value in ipairs({"Highlight", "Funny", "Mistake", "Audio", "Panic", "Reaction", "Custom"}) do
     obs.obs_property_list_add_string(type_list, value, value)
   end
 
@@ -511,14 +515,14 @@ function script_properties()
   obs.obs_properties_add_text(props, "main_scene_name", "Main scene name", obs.OBS_TEXT_DEFAULT)
   obs.obs_properties_add_int(props, "auto_intro_seconds", "AutoIntro seconds", 1, 60, 1)
 
-  for i = 1, 4 do
+  for i = 1, SOUND_SLOTS do
     obs.obs_properties_add_text(props, "sound" .. i .. "_title", "Sound " .. i .. " title", obs.OBS_TEXT_DEFAULT)
     obs.obs_properties_add_path(props, "sound" .. i .. "_file", "Sound " .. i .. " file", obs.OBS_PATH_FILE, "Audio Files (*.mp3 *.wav *.ogg *.flac)", nil)
     obs.obs_properties_add_int(props, "sound" .. i .. "_volume", "Sound " .. i .. " volume", 0, 100, 1)
   end
 
   obs.obs_properties_add_path(props, "import_config_path", "Import config path", obs.OBS_PATH_FILE, "JSON Files (*.json)", nil)
-  obs.obs_properties_add_button(props, "import_config_button", "Preview imported config", function() import_config(); return true end)
+  obs.obs_properties_add_button(props, "import_config_button", "Preview imported config", function() import_config_preview(); return true end)
   obs.obs_properties_add_path(props, "export_config_path", "Export config path", obs.OBS_PATH_FILE_SAVE, "JSON Files (*.json)", nil)
   obs.obs_properties_add_button(props, "export_config_button", "Export current config", function() export_config(); return true end)
 
@@ -530,14 +534,13 @@ function script_defaults(settings)
   obs.obs_data_set_default_bool(settings, "enable_auto_intro", false)
   obs.obs_data_set_default_int(settings, "auto_intro_seconds", 5)
   obs.obs_data_set_default_string(settings, "marker_type", "Highlight")
-  for i = 1, 4 do
+  for i = 1, SOUND_SLOTS do
     obs.obs_data_set_default_string(settings, "sound" .. i .. "_title", "Sound " .. i)
     obs.obs_data_set_default_int(settings, "sound" .. i .. "_volume", 80)
   end
 end
 
 function script_update(settings)
-  settings_ref = settings
   output_dir = obs.obs_data_get_string(settings, "output_dir")
   marker_note = obs.obs_data_get_string(settings, "marker_note")
   marker_type = obs.obs_data_get_string(settings, "marker_type")
@@ -553,7 +556,7 @@ function script_update(settings)
   import_config_path = obs.obs_data_get_string(settings, "import_config_path")
   export_config_path = obs.obs_data_get_string(settings, "export_config_path")
 
-  for i = 1, 4 do
+  for i = 1, SOUND_SLOTS do
     sounds[i].title = obs.obs_data_get_string(settings, "sound" .. i .. "_title")
     sounds[i].file = obs.obs_data_get_string(settings, "sound" .. i .. "_file")
     sounds[i].volume = obs.obs_data_get_int(settings, "sound" .. i .. "_volume")
@@ -562,11 +565,11 @@ end
 
 function script_load(settings)
   hotkey_ids.add_marker = obs.obs_hotkey_register_frontend("obs_controldeck.add_marker", "ControlDeck: Add marker", hotkey_marker)
+  hotkey_ids.reaction_marker = obs.obs_hotkey_register_frontend("obs_controldeck.reaction_marker", "ControlDeck: Add reaction marker", hotkey_reaction_marker)
   hotkey_ids.panic = obs.obs_hotkey_register_frontend("obs_controldeck.panic", "ControlDeck: Panic Button", hotkey_panic)
-  hotkey_ids.sound1 = obs.obs_hotkey_register_frontend("obs_controldeck.sound1", "ControlDeck: Play Sound 1", hotkey_sound(1))
-  hotkey_ids.sound2 = obs.obs_hotkey_register_frontend("obs_controldeck.sound2", "ControlDeck: Play Sound 2", hotkey_sound(2))
-  hotkey_ids.sound3 = obs.obs_hotkey_register_frontend("obs_controldeck.sound3", "ControlDeck: Play Sound 3", hotkey_sound(3))
-  hotkey_ids.sound4 = obs.obs_hotkey_register_frontend("obs_controldeck.sound4", "ControlDeck: Play Sound 4", hotkey_sound(4))
+  for i = 1, SOUND_SLOTS do
+    hotkey_ids["sound" .. tostring(i)] = obs.obs_hotkey_register_frontend("obs_controldeck.sound" .. tostring(i), "ControlDeck: Play Sound " .. tostring(i), hotkey_sound(i))
+  end
 
   for name, id in pairs(hotkey_ids) do
     local saved = obs.obs_data_get_array(settings, "hotkey_" .. name)
@@ -589,7 +592,8 @@ function script_save(settings)
 end
 
 function script_unload()
-  save_session_files()
+  if recording_started_at ~= nil then save_session_files() end
+  obs.timer_remove(control_deck_auto_intro_finish)
   obs.obs_frontend_remove_event_callback(on_event)
   log_info("Unloaded")
 end
