@@ -12,4 +12,4 @@ RUN python -m pip install --upgrade pip && \
 COPY . .
 RUN mkdir -p /app/data
 
-CMD ["python", "bot.py"]
+CMD ["python", "secure_app.py"]
