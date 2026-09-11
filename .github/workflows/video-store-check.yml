@@ -38,3 +38,6 @@ jobs:
           asyncio.run(bot.init_db())
           print("SQLite smoke test OK")
           PY
+
+      - name: Build Docker image
+        run: docker build -t video-store-check .
