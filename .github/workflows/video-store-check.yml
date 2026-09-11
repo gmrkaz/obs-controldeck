@@ -23,7 +23,7 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Compile bot
-        run: python -m py_compile bot.py app.py broadcast.py
+        run: python -m py_compile bot.py app.py broadcast.py admin_manage.py
 
       - name: SQLite smoke test
         env:
@@ -34,13 +34,10 @@ jobs:
           python - <<'PY'
           import asyncio
           import bot
-          import broadcast
+          from broadcast import init_broadcast_db
 
-          async def main():
-              await bot.init_db()
-              await broadcast.init_broadcast_db()
-
-          asyncio.run(main())
+          asyncio.run(bot.init_db())
+          asyncio.run(init_broadcast_db())
           print("SQLite smoke test OK")
           PY
 
