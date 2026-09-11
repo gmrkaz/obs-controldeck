@@ -1,6 +1,6 @@
 import asyncio
 
-from bot import main
+from secure_app import main
 
 
 if __name__ == "__main__":
