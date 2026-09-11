@@ -15,3 +15,5 @@ Start file: `bot.py`
 Add a product by sending a video to the bot with caption:
 
 `#add Category | Title | 150 | Description`
+
+CI: installs dependencies on Python 3.11, compiles `bot.py`, and runs a SQLite smoke test.
