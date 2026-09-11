@@ -5,12 +5,16 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Awaitable, Callable
 
 import aiosqlite
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -18,6 +22,8 @@ from aiogram.types import (
     LabeledPrice,
     Message,
     PreCheckoutQuery,
+    TelegramObject,
+    User,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
@@ -40,8 +46,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+logger = logging.getLogger(__name__)
+router = Router(name="video_store")
 
-router = Router()
 
 TEXT_FIELDS = {
     "start_text": (
@@ -67,7 +74,22 @@ TEXT_FIELDS = {
     "btn_pay": ("🔘 Кнопка оплаты", "⭐ Оплатить {stars} звёзд"),
 }
 
-pending_text_edit: dict[int, str] = {}
+
+class TextEditState(StatesGroup):
+    waiting_value = State()
+
+
+class BroadcastState(StatesGroup):
+    waiting_message = State()
+    confirm = State()
+
+
+class AdminEditState(StatesGroup):
+    create_category = State()
+    rename_category = State()
+    edit_product_title = State()
+    edit_product_price = State()
+    edit_product_description = State()
 
 
 def now() -> str:
@@ -127,9 +149,81 @@ async def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS broadcast_users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                subscribed INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_seen TEXT NOT NULL
+            );
             """
         )
         await db.commit()
+
+
+async def upsert_user(user: User):
+    stamp = now()
+    async with conn() as db:
+        await db.execute(
+            """
+            INSERT INTO broadcast_users(
+                user_id, username, first_name, subscribed, created_at, last_seen
+            ) VALUES(?, ?, ?, 1, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_seen = excluded.last_seen
+            """,
+            (user.id, user.username, user.first_name, stamp, stamp),
+        )
+        await db.commit()
+
+
+async def set_subscription(user_id: int, subscribed: bool):
+    async with conn() as db:
+        await db.execute(
+            "UPDATE broadcast_users SET subscribed = ?, last_seen = ? WHERE user_id = ?",
+            (1 if subscribed else 0, now(), user_id),
+        )
+        await db.commit()
+
+
+async def subscribed_user_ids() -> list[int]:
+    async with conn() as db:
+        rows = await (
+            await db.execute(
+                "SELECT user_id FROM broadcast_users WHERE subscribed = 1 ORDER BY user_id"
+            )
+        ).fetchall()
+        return [int(row["user_id"]) for row in rows]
+
+
+async def broadcast_user_count() -> int:
+    async with conn() as db:
+        row = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM broadcast_users WHERE subscribed = 1"
+            )
+        ).fetchone()
+        return int(row["n"])
+
+
+class UserTrackingMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = data.get("event_from_user")
+        if isinstance(user, User) and not user.is_bot:
+            try:
+                await upsert_user(user)
+            except Exception:
+                logger.exception("Failed to track Telegram user %s", user.id)
+        return await handler(event, data)
 
 
 async def get_text(key: str) -> str:
@@ -169,12 +263,10 @@ async def get_cat(name: str) -> int:
                 (name,),
             )
         ).fetchone()
-
         if row:
             await db.execute("UPDATE categories SET active = 1 WHERE id = ?", (row["id"],))
             await db.commit()
             return int(row["id"])
-
         cur = await db.execute(
             "INSERT INTO categories(name, created_at) VALUES(?, ?)",
             (name, now()),
@@ -190,8 +282,7 @@ async def categories():
                 """
                 SELECT c.id, c.name, COUNT(p.id) AS n
                 FROM categories c
-                LEFT JOIN products p
-                    ON p.category_id = c.id AND p.active = 1
+                LEFT JOIN products p ON p.category_id = c.id AND p.active = 1
                 WHERE c.active = 1
                 GROUP BY c.id
                 ORDER BY c.id
@@ -263,10 +354,7 @@ async def main_kb() -> InlineKeyboardMarkup:
 async def cats_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for item in await categories():
-        kb.button(
-            text=f"📁 {item['name']} · {item['n']}",
-            callback_data=f"cat:{item['id']}",
-        )
+        kb.button(text=f"📁 {item['name']} · {item['n']}", callback_data=f"cat:{item['id']}")
     kb.button(text=await get_text("btn_owned"), callback_data="owned")
     kb.button(text=await get_text("btn_back_home"), callback_data="home")
     kb.adjust(1)
@@ -296,6 +384,11 @@ def admin_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Сообщения и кнопки", callback_data="admin_texts")],
+            [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast")],
+            [
+                InlineKeyboardButton(text="📁 Категории", callback_data="admin_categories"),
+                InlineKeyboardButton(text="🎬 Видео", callback_data="admin_products"),
+            ],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
             [InlineKeyboardButton(text="➕ Как добавить видео", callback_data="admin_add_help")],
         ]
@@ -306,6 +399,44 @@ def admin_texts_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=label, callback_data=f"edittext:{key}")]
         for key, (label, _) in TEXT_FIELDS.items()
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin_home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def categories_admin_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for item in await categories():
+        rows.append([
+            InlineKeyboardButton(
+                text=f"📁 {item['name']} · {item['n']}",
+                callback_data=f"admin_cat:{item['id']}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Создать категорию", callback_data="admin_cat_create")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin_home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def products_admin_kb() -> InlineKeyboardMarkup:
+    async with conn() as db:
+        rows_db = await (
+            await db.execute(
+                """
+                SELECT p.id, p.title, p.stars
+                FROM products p
+                WHERE p.active = 1
+                ORDER BY p.id DESC
+                LIMIT 50
+                """
+            )
+        ).fetchall()
+    rows = [
+        [InlineKeyboardButton(
+            text=f"🎬 {row['title']} · ⭐ {row['stars']}",
+            callback_data=f"admin_product:{row['id']}",
+        )]
+        for row in rows_db
     ]
     rows.append([InlineKeyboardButton(text="⬅️ Админка", callback_data="admin_home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -327,30 +458,21 @@ async def send_video(bot: Bot, user_id: int, item):
 
 @router.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        await get_text("start_text"),
-        reply_markup=await main_kb(),
-    )
+    await message.answer(await get_text("start_text"), reply_markup=await main_kb())
 
 
 @router.callback_query(F.data == "home")
 async def home(call: CallbackQuery):
     await call.answer()
     if call.message:
-        await call.message.edit_text(
-            await get_text("home_text"),
-            reply_markup=await main_kb(),
-        )
+        await call.message.edit_text(await get_text("home_text"), reply_markup=await main_kb())
 
 
 @router.callback_query(F.data == "catalog")
 async def catalog(call: CallbackQuery):
     await call.answer()
     if call.message:
-        await call.message.edit_text(
-            await get_text("catalog_text"),
-            reply_markup=await cats_kb(),
-        )
+        await call.message.edit_text(await get_text("catalog_text"), reply_markup=await cats_kb())
 
 
 @router.callback_query(F.data.startswith("cat:"))
@@ -358,12 +480,10 @@ async def cat(call: CallbackQuery):
     await call.answer()
     if not call.message:
         return
-
     try:
-        category_id = int(call.data.split(":", 1)[1])
-    except (TypeError, ValueError):
+        category_id = int((call.data or "").split(":", 1)[1])
+    except ValueError:
         return
-
     await call.message.edit_text(
         await get_text("choose_video_text"),
         reply_markup=await products_kb(category_id),
@@ -373,26 +493,20 @@ async def cat(call: CallbackQuery):
 @router.callback_query(F.data.startswith("product:"))
 async def buy(call: CallbackQuery, bot: Bot):
     await call.answer()
-
     try:
-        product_id = int(call.data.split(":", 1)[1])
-    except (TypeError, ValueError):
+        product_id = int((call.data or "").split(":", 1)[1])
+    except ValueError:
         return
-
     item = await product(product_id)
     if not item:
         await call.answer("Товар недоступен", show_alert=True)
         return
-
     if await owns(call.from_user.id, product_id):
         await send_video(bot, call.from_user.id, item)
         return
 
     title = (item["title"] or "Видео")[:32]
-    description = (
-        item["description"] or f"Видео из категории {item['category_name']}"
-    )[:255]
-
+    description = (item["description"] or f"Видео из категории {item['category_name']}")[:255]
     await bot.send_invoice(
         chat_id=call.from_user.id,
         title=title,
@@ -411,13 +525,11 @@ async def checkout(query: PreCheckoutQuery):
     if not payload.startswith("product:"):
         await query.answer(ok=False, error_message="Некорректный товар.")
         return
-
     try:
         product_id = int(payload.split(":", 1)[1])
     except ValueError:
         await query.answer(ok=False, error_message="Некорректный товар.")
         return
-
     item = await product(product_id)
     if query.currency != "XTR" or not item or query.total_amount != int(item["stars"]):
         await query.answer(
@@ -425,14 +537,12 @@ async def checkout(query: PreCheckoutQuery):
             error_message="Товар или цена изменились. Открой карточку заново.",
         )
         return
-
     if await owns(query.from_user.id, product_id):
         await query.answer(
             ok=False,
             error_message="Ты уже покупал это видео. Открой «Мои покупки».",
         )
         return
-
     await query.answer(ok=True)
 
 
@@ -441,34 +551,23 @@ async def paid(message: Message, bot: Bot):
     payment = message.successful_payment
     if not payment or not message.from_user:
         return
-
     payload = payment.invoice_payload or ""
     if not payload.startswith("product:"):
         return
-
     try:
         product_id = int(payload.split(":", 1)[1])
     except ValueError:
         return
-
     item = await product(product_id)
-    if (
-        not item
-        or payment.currency != "XTR"
-        or payment.total_amount != int(item["stars"])
-    ):
-        await message.answer(
-            "Платёж получен, но возникла ошибка выдачи. Напиши /paysupport"
-        )
+    if not item or payment.currency != "XTR" or payment.total_amount != int(item["stars"]):
+        await message.answer("Платёж получен, но возникла ошибка выдачи. Напиши /paysupport")
         return
-
     await save_purchase(
         message.from_user.id,
         product_id,
         int(payment.total_amount),
         payment.telegram_payment_charge_id,
     )
-
     success_text = (await get_text("payment_success_text")).replace(
         "{stars}", str(payment.total_amount)
     )
@@ -479,7 +578,6 @@ async def paid(message: Message, bot: Bot):
 @router.callback_query(F.data == "owned")
 async def owned(call: CallbackQuery):
     await call.answer()
-
     async with conn() as db:
         rows = await (
             await db.execute(
@@ -493,13 +591,11 @@ async def owned(call: CallbackQuery):
                 (call.from_user.id,),
             )
         ).fetchall()
-
     kb = InlineKeyboardBuilder()
     for item in rows:
         kb.button(text=f"✅ {item['title']}", callback_data=f"owned:{item['id']}")
     kb.button(text=await get_text("btn_back_catalog"), callback_data="catalog")
     kb.adjust(1)
-
     if call.message:
         await call.message.edit_text(
             await get_text("owned_text") if rows else await get_text("owned_empty_text"),
@@ -510,81 +606,23 @@ async def owned(call: CallbackQuery):
 @router.callback_query(F.data.startswith("owned:"))
 async def owned_item(call: CallbackQuery, bot: Bot):
     await call.answer()
-
     try:
-        product_id = int(call.data.split(":", 1)[1])
-    except (TypeError, ValueError):
+        product_id = int((call.data or "").split(":", 1)[1])
+    except ValueError:
         return
-
     if not await owns(call.from_user.id, product_id):
         await call.answer("Покупка не найдена", show_alert=True)
         return
-
     item = await product(product_id)
     if item:
         await send_video(bot, call.from_user.id, item)
 
 
-@router.message(F.video)
-async def add_video(message: Message):
-    if not is_admin(message.from_user.id if message.from_user else None):
-        return
-
-    caption = (message.caption or "").strip()
-    if not caption.lower().startswith("#add"):
-        await message.answer(
-            "Формат: <code>#add Категория | Название | 150 | Описание</code>"
-        )
-        return
-
-    parts = [part.strip() for part in caption[4:].strip().split("|")]
-    if len(parts) < 3 or not parts[0] or not parts[1]:
-        await message.answer(
-            "❌ Формат: <code>#add Категория | Название | 150 | Описание</code>"
-        )
-        return
-
-    try:
-        stars = int(parts[2])
-    except ValueError:
-        await message.answer("❌ Цена должна быть числом.")
-        return
-
-    if not 1 <= stars <= 25000:
-        await message.answer("❌ Цена: 1–25 000 Stars.")
-        return
-
-    category_id = await get_cat(parts[0])
-    description = " | ".join(parts[3:]) if len(parts) > 3 else ""
-
-    async with conn() as db:
-        cur = await db.execute(
-            """
-            INSERT INTO products(category_id, title, description, stars, file_id, created_at)
-            VALUES(?, ?, ?, ?, ?, ?)
-            """,
-            (
-                category_id,
-                parts[1],
-                description,
-                stars,
-                message.video.file_id,
-                now(),
-            ),
-        )
-        await db.commit()
-        product_id = int(cur.lastrowid)
-
-    await message.answer(
-        f"✅ Добавлено. ID <code>{product_id}</code>\n"
-        f"Кнопка: <b>⭐ Оплатить {stars} звёзд</b>"
-    )
-
-
 @router.message(Command("admin"))
-async def admin(message: Message):
+async def admin(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id if message.from_user else None):
         return
+    await state.clear()
     await message.answer(
         "🛠 <b>Админ-панель</b>\n\nВыбери, что хочешь настроить:",
         reply_markup=admin_kb(),
@@ -592,10 +630,10 @@ async def admin(message: Message):
 
 
 @router.callback_query(F.data == "admin_home")
-async def admin_home(call: CallbackQuery):
+async def admin_home(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer("Нет доступа", show_alert=True)
-    pending_text_edit.pop(call.from_user.id, None)
+    await state.clear()
     await call.answer()
     if call.message:
         await call.message.edit_text(
@@ -605,9 +643,10 @@ async def admin_home(call: CallbackQuery):
 
 
 @router.callback_query(F.data == "admin_texts")
-async def admin_texts(call: CallbackQuery):
+async def admin_texts(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
     await call.answer()
     if call.message:
         await call.message.edit_text(
@@ -617,19 +656,17 @@ async def admin_texts(call: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("edittext:"))
-async def edit_text_start(call: CallbackQuery):
+async def edit_text_start(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer("Нет доступа", show_alert=True)
-
     key = (call.data or "").split(":", 1)[1]
     if key not in TEXT_FIELDS:
         return await call.answer("Неизвестное поле", show_alert=True)
-
-    pending_text_edit[call.from_user.id] = key
+    await state.set_state(TextEditState.waiting_value)
+    await state.update_data(text_key=key)
     label = TEXT_FIELDS[key][0]
     current = await get_text(key)
     await call.answer()
-
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="♻️ Сбросить по умолчанию", callback_data=f"resettext:{key}")],
@@ -640,20 +677,44 @@ async def edit_text_start(call: CallbackQuery):
         await call.message.edit_text(
             f"✏️ <b>{html.escape(label)}</b>\n\n"
             f"Сейчас:\n<code>{html.escape(current)}</code>\n\n"
-            "Отправь мне новым сообщением новый текст.\n"
+            "Отправь новым сообщением новый текст.\n"
             "Можно использовать <code>{stars}</code> там, где показывается цена.",
             reply_markup=kb,
         )
 
 
+@router.message(TextEditState.waiting_value)
+async def edit_text_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    data = await state.get_data()
+    key = data.get("text_key")
+    if key not in TEXT_FIELDS:
+        await state.clear()
+        return
+    value = (message.text or "").strip()
+    if not value:
+        await message.answer("❌ Текст не может быть пустым.")
+        return
+    if len(value) > 3500:
+        await message.answer("❌ Слишком длинный текст. Максимум 3500 символов.")
+        return
+    await set_text(str(key), value)
+    await state.clear()
+    await message.answer(
+        f"✅ <b>{html.escape(TEXT_FIELDS[str(key)][0])}</b> обновлено.",
+        reply_markup=admin_texts_kb(),
+    )
+
+
 @router.callback_query(F.data.startswith("resettext:"))
-async def reset_text_callback(call: CallbackQuery):
+async def reset_text_callback(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer("Нет доступа", show_alert=True)
     key = (call.data or "").split(":", 1)[1]
     if key not in TEXT_FIELDS:
         return await call.answer("Неизвестное поле", show_alert=True)
-    pending_text_edit.pop(call.from_user.id, None)
+    await state.clear()
     await reset_text(key)
     await call.answer("Сброшено")
     if call.message:
@@ -680,6 +741,345 @@ async def admin_add_help(call: CallbackQuery):
         )
 
 
+@router.message(F.video)
+async def add_video(message: Message):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return
+    caption = (message.caption or "").strip()
+    if not caption.lower().startswith("#add"):
+        return
+    parts = [part.strip() for part in caption[4:].strip().split("|")]
+    if len(parts) < 3 or not parts[0] or not parts[1]:
+        await message.answer("❌ Формат: <code>#add Категория | Название | 150 | Описание</code>")
+        return
+    try:
+        stars = int(parts[2])
+    except ValueError:
+        await message.answer("❌ Цена должна быть числом.")
+        return
+    if not 1 <= stars <= 25000:
+        await message.answer("❌ Цена: 1–25 000 Stars.")
+        return
+    category_id = await get_cat(parts[0])
+    description = " | ".join(parts[3:]) if len(parts) > 3 else ""
+    async with conn() as db:
+        cur = await db.execute(
+            """
+            INSERT INTO products(category_id, title, description, stars, file_id, created_at)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (category_id, parts[1], description, stars, message.video.file_id, now()),
+        )
+        await db.commit()
+        product_id = int(cur.lastrowid)
+    await message.answer(
+        f"✅ Добавлено. ID <code>{product_id}</code>\n"
+        f"Кнопка: <b>⭐ Оплатить {stars} звёзд</b>"
+    )
+
+
+@router.callback_query(F.data == "admin_categories")
+async def admin_categories(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    await call.answer()
+    if call.message:
+        await call.message.edit_text(
+            "📁 <b>Категории</b>\n\nВыбери категорию или создай новую:",
+            reply_markup=await categories_admin_kb(),
+        )
+
+
+@router.callback_query(F.data == "admin_cat_create")
+async def admin_cat_create(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.set_state(AdminEditState.create_category)
+    await call.answer()
+    if call.message:
+        await call.message.edit_text(
+            "➕ <b>Новая категория</b>\n\nОтправь название новой категории.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_categories")]]
+            ),
+        )
+
+
+@router.message(AdminEditState.create_category)
+async def admin_cat_create_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    name = (message.text or "").strip()
+    if not name or len(name) > 64:
+        await message.answer("❌ Название должно быть от 1 до 64 символов.")
+        return
+    await get_cat(name)
+    await state.clear()
+    await message.answer("✅ Категория создана.", reply_markup=await categories_admin_kb())
+
+
+@router.callback_query(F.data.startswith("admin_cat:"))
+async def admin_cat_detail(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    try:
+        category_id = int((call.data or "").split(":", 1)[1])
+    except ValueError:
+        return await call.answer("Ошибка категории", show_alert=True)
+    async with conn() as db:
+        row = await (
+            await db.execute(
+                "SELECT id, name FROM categories WHERE id = ? AND active = 1",
+                (category_id,),
+            )
+        ).fetchone()
+        count = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE category_id = ? AND active = 1",
+                (category_id,),
+            )
+        ).fetchone()
+    if not row:
+        return await call.answer("Категория не найдена", show_alert=True)
+    await call.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"admin_cat_rename:{category_id}")],
+        [InlineKeyboardButton(text="🗑 Скрыть категорию", callback_data=f"admin_cat_delete:{category_id}")],
+        [InlineKeyboardButton(text="⬅️ Категории", callback_data="admin_categories")],
+    ])
+    if call.message:
+        await call.message.edit_text(
+            f"📁 <b>{html.escape(row['name'])}</b>\nВидео: <b>{count['n']}</b>",
+            reply_markup=kb,
+        )
+
+
+@router.callback_query(F.data.startswith("admin_cat_rename:"))
+async def admin_cat_rename(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    category_id = int((call.data or "").split(":", 1)[1])
+    await state.set_state(AdminEditState.rename_category)
+    await state.update_data(category_id=category_id)
+    await call.answer()
+    if call.message:
+        await call.message.edit_text("✏️ Отправь новое название категории.")
+
+
+@router.message(AdminEditState.rename_category)
+async def admin_cat_rename_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    data = await state.get_data()
+    name = (message.text or "").strip()
+    if not name or len(name) > 64:
+        await message.answer("❌ Название должно быть от 1 до 64 символов.")
+        return
+    try:
+        async with conn() as db:
+            await db.execute(
+                "UPDATE categories SET name = ? WHERE id = ?",
+                (name, int(data["category_id"])),
+            )
+            await db.commit()
+    except aiosqlite.IntegrityError:
+        await message.answer("❌ Такое название уже используется.")
+        return
+    await state.clear()
+    await message.answer("✅ Категория переименована.", reply_markup=await categories_admin_kb())
+
+
+@router.callback_query(F.data.startswith("admin_cat_delete:"))
+async def admin_cat_delete(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    category_id = int((call.data or "").split(":", 1)[1])
+    async with conn() as db:
+        await db.execute("UPDATE categories SET active = 0 WHERE id = ?", (category_id,))
+        await db.execute("UPDATE products SET active = 0 WHERE category_id = ?", (category_id,))
+        await db.commit()
+    await call.answer("Категория скрыта")
+    if call.message:
+        await call.message.edit_text(
+            "✅ Категория и её видео скрыты.",
+            reply_markup=await categories_admin_kb(),
+        )
+
+
+@router.callback_query(F.data == "admin_products")
+async def admin_products(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    await call.answer()
+    if call.message:
+        await call.message.edit_text(
+            "🎬 <b>Видео</b>\n\nПоказаны последние 50 активных видео:",
+            reply_markup=await products_admin_kb(),
+        )
+
+
+@router.callback_query(F.data.startswith("admin_product:"))
+async def admin_product_detail(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    product_id = int((call.data or "").split(":", 1)[1])
+    item = await product(product_id)
+    if not item:
+        return await call.answer("Видео не найдено", show_alert=True)
+    await call.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️ Название", callback_data=f"admin_product_title:{product_id}"),
+            InlineKeyboardButton(text="⭐ Цена", callback_data=f"admin_product_price:{product_id}"),
+        ],
+        [InlineKeyboardButton(text="📝 Описание", callback_data=f"admin_product_desc:{product_id}")],
+        [InlineKeyboardButton(text="🗑 Скрыть видео", callback_data=f"admin_product_delete:{product_id}")],
+        [InlineKeyboardButton(text="⬅️ Видео", callback_data="admin_products")],
+    ])
+    if call.message:
+        await call.message.edit_text(
+            f"🎬 <b>{html.escape(item['title'])}</b>\n"
+            f"📁 {html.escape(item['category_name'])}\n"
+            f"⭐ {item['stars']}\n\n"
+            f"{html.escape(item['description'] or 'Без описания')}",
+            reply_markup=kb,
+        )
+
+
+async def start_product_edit(
+    call: CallbackQuery,
+    state: FSMContext,
+    state_value: State,
+    product_id: int,
+    prompt: str,
+):
+    await state.set_state(state_value)
+    await state.update_data(product_id=product_id)
+    await call.answer()
+    if call.message:
+        await call.message.edit_text(prompt)
+
+
+@router.callback_query(F.data.startswith("admin_product_title:"))
+async def edit_product_title(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await start_product_edit(
+        call,
+        state,
+        AdminEditState.edit_product_title,
+        int((call.data or "").split(":", 1)[1]),
+        "✏️ Отправь новое название видео.",
+    )
+
+
+@router.callback_query(F.data.startswith("admin_product_price:"))
+async def edit_product_price(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await start_product_edit(
+        call,
+        state,
+        AdminEditState.edit_product_price,
+        int((call.data or "").split(":", 1)[1]),
+        "⭐ Отправь новую цену в Stars (1–25000).",
+    )
+
+
+@router.callback_query(F.data.startswith("admin_product_desc:"))
+async def edit_product_desc(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await start_product_edit(
+        call,
+        state,
+        AdminEditState.edit_product_description,
+        int((call.data or "").split(":", 1)[1]),
+        "📝 Отправь новое описание видео.",
+    )
+
+
+@router.message(AdminEditState.edit_product_title)
+async def edit_product_title_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    data = await state.get_data()
+    value = (message.text or "").strip()
+    if not value or len(value) > 120:
+        await message.answer("❌ Название: 1–120 символов.")
+        return
+    async with conn() as db:
+        await db.execute(
+            "UPDATE products SET title = ? WHERE id = ?",
+            (value, int(data["product_id"])),
+        )
+        await db.commit()
+    await state.clear()
+    await message.answer("✅ Название изменено.", reply_markup=await products_admin_kb())
+
+
+@router.message(AdminEditState.edit_product_price)
+async def edit_product_price_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    data = await state.get_data()
+    try:
+        value = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("❌ Отправь число от 1 до 25000.")
+        return
+    if not 1 <= value <= 25000:
+        await message.answer("❌ Цена должна быть от 1 до 25000 Stars.")
+        return
+    async with conn() as db:
+        await db.execute(
+            "UPDATE products SET stars = ? WHERE id = ?",
+            (value, int(data["product_id"])),
+        )
+        await db.commit()
+    await state.clear()
+    await message.answer("✅ Цена изменена.", reply_markup=await products_admin_kb())
+
+
+@router.message(AdminEditState.edit_product_description)
+async def edit_product_desc_value(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    data = await state.get_data()
+    value = (message.text or "").strip()
+    if len(value) > 1000:
+        await message.answer("❌ Описание максимум 1000 символов.")
+        return
+    async with conn() as db:
+        await db.execute(
+            "UPDATE products SET description = ? WHERE id = ?",
+            (value, int(data["product_id"])),
+        )
+        await db.commit()
+    await state.clear()
+    await message.answer("✅ Описание изменено.", reply_markup=await products_admin_kb())
+
+
+@router.callback_query(F.data.startswith("admin_product_delete:"))
+async def admin_product_delete(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    product_id = int((call.data or "").split(":", 1)[1])
+    async with conn() as db:
+        await db.execute("UPDATE products SET active = 0 WHERE id = ?", (product_id,))
+        await db.commit()
+    await call.answer("Видео скрыто")
+    if call.message:
+        await call.message.edit_text(
+            "✅ Видео скрыто из магазина.",
+            reply_markup=await products_admin_kb(),
+        )
+
+
 async def stats_text() -> str:
     async with conn() as db:
         purchases_row = await (
@@ -693,9 +1093,16 @@ async def stats_text() -> str:
         cats_row = await (
             await db.execute("SELECT COUNT(*) AS n FROM categories WHERE active = 1")
         ).fetchone()
-
+        users_row = await (
+            await db.execute("SELECT COUNT(*) AS n FROM broadcast_users")
+        ).fetchone()
+        subscribed_row = await (
+            await db.execute("SELECT COUNT(*) AS n FROM broadcast_users WHERE subscribed = 1")
+        ).fetchone()
     return (
         f"📊 <b>Статистика</b>\n\n"
+        f"Пользователей: <b>{users_row['n']}</b>\n"
+        f"Подписаны на рассылку: <b>{subscribed_row['n']}</b>\n"
         f"Категорий: <b>{cats_row['n']}</b>\n"
         f"Видео: <b>{videos_row['n']}</b>\n"
         f"Покупок: <b>{purchases_row['n']}</b>\n"
@@ -724,6 +1131,138 @@ async def stats(message: Message):
     await message.answer(await stats_text())
 
 
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    await state.set_state(BroadcastState.waiting_message)
+    count = await broadcast_user_count()
+    await call.answer()
+    if call.message:
+        await call.message.edit_text(
+            "📣 <b>Новая рассылка</b>\n\n"
+            "Отправь следующим сообщением текст, фото или видео.\n\n"
+            f"Получателей сейчас: <b>{count}</b>\n\n"
+            "Перед отправкой бот попросит подтверждение.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]]
+            ),
+        )
+
+
+@router.message(Command("broadcast"))
+async def broadcast_command(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return
+    await state.clear()
+    await state.set_state(BroadcastState.waiting_message)
+    count = await broadcast_user_count()
+    await message.answer(
+        "📣 <b>Новая рассылка</b>\n\n"
+        "Отправь следующим сообщением текст, фото или видео.\n\n"
+        f"Получателей сейчас: <b>{count}</b>.",
+    )
+
+
+@router.message(BroadcastState.waiting_message)
+async def capture_broadcast(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id if message.from_user else None):
+        return await state.clear()
+    await state.update_data(
+        source_chat_id=message.chat.id,
+        source_message_id=message.message_id,
+    )
+    await state.set_state(BroadcastState.confirm)
+    count = await broadcast_user_count()
+    await message.answer(
+        "✅ Сообщение сохранено для рассылки.\n\n"
+        f"Получателей: <b>{count}</b>\n"
+        "Нажми кнопку ниже, чтобы начать отправку.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🚀 Отправить всем", callback_data="broadcast_send")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(BroadcastState.confirm, F.data == "broadcast_send")
+async def send_broadcast(call: CallbackQuery, state: FSMContext, bot: Bot):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    data = await state.get_data()
+    source_chat_id = data.get("source_chat_id")
+    source_message_id = data.get("source_message_id")
+    if not source_chat_id or not source_message_id:
+        await state.clear()
+        return await call.answer("Сообщение для рассылки потеряно", show_alert=True)
+
+    await call.answer("Рассылка запущена")
+    if call.message:
+        await call.message.edit_text("📣 Рассылка запущена…")
+
+    sent = 0
+    failed = 0
+    for user_id in await subscribed_user_ids():
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=int(source_chat_id),
+                message_id=int(source_message_id),
+            )
+            sent += 1
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 1.0)
+            try:
+                await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=int(source_chat_id),
+                    message_id=int(source_message_id),
+                )
+                sent += 1
+            except TelegramAPIError:
+                failed += 1
+        except TelegramForbiddenError:
+            failed += 1
+            await set_subscription(user_id, False)
+        except TelegramAPIError:
+            failed += 1
+        await asyncio.sleep(0.04)
+
+    await state.clear()
+    text = f"✅ Рассылка завершена.\n\nОтправлено: <b>{sent}</b>\nОшибок: <b>{failed}</b>"
+    if call.message:
+        await call.message.edit_text(text, reply_markup=admin_kb())
+    else:
+        await bot.send_message(call.from_user.id, text, reply_markup=admin_kb())
+
+
+@router.callback_query(F.data == "broadcast_cancel")
+async def broadcast_cancel(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    await call.answer("Отменено")
+    if call.message:
+        await call.message.edit_text("❌ Рассылка отменена.", reply_markup=admin_kb())
+
+
+@router.message(Command("unsubscribe"))
+async def unsubscribe(message: Message):
+    if message.from_user:
+        await set_subscription(message.from_user.id, False)
+        await message.answer("🔕 Рекламные и информационные рассылки отключены. Вернуть: /subscribe")
+
+
+@router.message(Command("subscribe"))
+async def subscribe(message: Message):
+    if message.from_user:
+        await set_subscription(message.from_user.id, True)
+        await message.answer("🔔 Рассылки включены.")
+
+
 @router.message(Command("paysupport"))
 async def support(message: Message):
     if SUPPORT:
@@ -733,42 +1272,17 @@ async def support(message: Message):
 
 
 @router.message(Command("cancel"))
-async def cancel_edit(message: Message):
-    if not is_admin(message.from_user.id if message.from_user else None):
-        return
-    if message.from_user:
-        pending_text_edit.pop(message.from_user.id, None)
-    await message.answer("❌ Редактирование отменено.", reply_markup=admin_kb())
-
-
-@router.message(F.text)
-async def admin_text_value(message: Message):
-    if not message.from_user or not is_admin(message.from_user.id):
-        return
-
-    key = pending_text_edit.get(message.from_user.id)
-    if not key:
-        return
-
-    value = (message.text or "").strip()
-    if not value:
-        await message.answer("❌ Текст не может быть пустым.")
-        return
-    if len(value) > 3500:
-        await message.answer("❌ Слишком длинный текст. Максимум 3500 символов.")
-        return
-
-    await set_text(key, value)
-    pending_text_edit.pop(message.from_user.id, None)
-    await message.answer(
-        f"✅ <b>{html.escape(TEXT_FIELDS[key][0])}</b> обновлено.",
-        reply_markup=admin_texts_kb(),
-    )
+async def cancel(message: Message, state: FSMContext):
+    await state.clear()
+    if is_admin(message.from_user.id if message.from_user else None):
+        await message.answer("❌ Действие отменено.", reply_markup=admin_kb())
+    else:
+        await message.answer("❌ Действие отменено.")
 
 
 async def main():
     await init_db()
-    bot = Bot(
+    tg_bot = Bot(
         TOKEN,
         default=DefaultBotProperties(
             parse_mode=ParseMode.HTML,
@@ -776,9 +1290,10 @@ async def main():
         ),
     )
     dp = Dispatcher()
+    dp.update.outer_middleware(UserTrackingMiddleware())
     dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=False)
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    await tg_bot.delete_webhook(drop_pending_updates=False)
+    await dp.start_polling(tg_bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
