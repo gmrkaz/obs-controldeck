@@ -1,7 +1,6 @@
 import asyncio
 import logging
 
-import aiosqlite
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -28,9 +27,6 @@ async def init_payment_guard() -> None:
             """
         )
 
-        # Backfill all already known payments. If the old purchases table already
-        # contains the same charge_id more than once, only the first one is kept
-        # in the payment ledger. From this point forward the id becomes unique.
         await db.execute(
             """
             INSERT OR IGNORE INTO payment_events(
@@ -187,7 +183,6 @@ class PaymentGuardMiddleware(BaseMiddleware):
         try:
             result = await handler(event, data)
         except Exception:
-            # Allow Telegram's repeated update to retry if processing really failed.
             await release_payment_claim(charge_id)
             raise
         else:
@@ -209,7 +204,7 @@ async def main() -> None:
 
     dp = Dispatcher()
     dp.update.outer_middleware(store.UserTrackingMiddleware())
-    dp.update.outer_middleware(PaymentGuardMiddleware())
+    dp.message.outer_middleware(PaymentGuardMiddleware())
     dp.include_router(store.router)
 
     await tg_bot.delete_webhook(drop_pending_updates=False)
